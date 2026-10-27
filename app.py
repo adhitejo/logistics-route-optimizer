@@ -28,21 +28,28 @@ def get_coordinates(location_name):
         pass
     return None, None, None
 
-def get_osrm_route(waypoints):
-    """Menghitung rute multi-drop OSRM"""
+def get_optimized_trip(waypoints):
+    """
+    Menggunakan OSRM Trip Service (TSP Algorithm)
+    Menghitung rute terbaik dan mengurutkan titik destinasi secara otomatis
+    """
     coord_str = ";".join([f"{lon},{lat}" for lat, lon in waypoints])
-    url = f"http://router.project-osrm.org/route/v1/driving/{coord_str}?overview=full&geometries=geojson"
+    # source=first memastikan titik Origin tidak berubah tempat
+    url = f"http://router.project-osrm.org/trip/v1/driving/{coord_str}?source=first&overview=full&geometries=geojson"
     try:
         res = requests.get(url).json()
-        if res.get("routes"):
-            route = res["routes"][0]
-            distance_km = route["distance"] / 1000.0
-            duration_min = route["duration"] / 60.0
-            geometry = route["geometry"]
-            return distance_km, duration_min, geometry
+        if res.get("code") == "Ok" and res.get("trips"):
+            trip = res["trips"][0]
+            distance_km = trip["distance"] / 1000.0
+            duration_min = trip["duration"] / 60.0
+            geometry = trip["geometry"]
+            
+            # Urutan indeks titik yang sudah dioptimasi oleh algoritma OSRM
+            waypoint_order = [wp["waypoint_index"] for wp in res["waypoints"]]
+            return distance_km, duration_min, geometry, waypoint_order
     except Exception:
         pass
-    return 0, 0, None
+    return 0, 0, None, []
 
 # Session state initialization
 if "calculation_result" not in st.session_state:
@@ -50,13 +57,11 @@ if "calculation_result" not in st.session_state:
 
 st.title("🚛 Logistic")
 
-# Navigasi Tab Utama
 tab1, tab2, tab3 = st.tabs(["Route & Cost Optimizer", "Order Management System (OMS)", "Transport Management System (TMS)"])
 
 with tab1:
     st.subheader("Route & Cost Optimization")
     
-    # Selection Region
     region = st.radio("Operating Region", ["Indonesia", "Outside Indonesia"], horizontal=True)
     currency = "IDR" if region == "Indonesia" else "USD"
     
@@ -64,17 +69,19 @@ with tab1:
     
     with col1:
         st.markdown("### 📍 Location & Drops")
-        origin_input = st.text_input("Origin", value="Surabaya")
+        origin_input = st.text_input("Origin (Start Point)", value="Surabaya")
         
-        num_dest = st.number_input("Number of Destination Points (Max 3 for Free Plan)", min_value=1, max_value=5, value=1)
+        num_dest = st.number_input("Number of Destination Points (Max 3 for Free Plan)", min_value=1, max_value=5, value=2)
         
         if num_dest > 3:
             st.warning("⚠️ Free plan limits up to 3 destinations. Upgrade to Pro for unlimited multi-drop routing!")
             num_dest = 3
             
         destinations = []
+        default_dests = ["Kediri", "Malang", "Blitar"]
         for i in range(int(num_dest)):
-            dest = st.text_input(f"Destination {i+1}", value="Malang" if i == 0 else f"Destination {i+1}")
+            default_val = default_dests[i] if i < len(default_dests) else f"Destination {i+1}"
+            dest = st.text_input(f"Destination Point {i+1}", value=default_val)
             destinations.append(dest)
             
     with col2:
@@ -93,10 +100,8 @@ with tab1:
         driver_cost = st.number_input(f"Driver Daily Allowance ({currency})", value=200000 if region == "Indonesia" else 150, step=10)
         departure_time = st.time_input("Departure Time", value=datetime.now().time())
         toll_cost = st.number_input(f"Toll Fee Estimation ({currency})", value=50000 if region == "Indonesia" else 20, step=5)
-        
-        st.info("💡 **Pro Feature Preview:** Automatic Toll vs Non-Toll route segment breakdown is available in the Enterprise plan.")
 
-    if st.button("Calculate Route & Cost", type="primary"):
+    if st.button("Calculate & Optimize Route", type="primary"):
         all_locations = [origin_input] + destinations
         coords_list = []
         names_list = []
@@ -113,7 +118,10 @@ with tab1:
                 break
                 
         if valid and len(coords_list) >= 2:
-            dist_km, dur_min, geom = get_osrm_route(coords_list)
+            dist_km, dur_min, geom, order_indices = get_optimized_trip(coords_list)
+            
+            # Susun ulang urutan nama lokasi berdasarkan hasil optimasi algoritma
+            ordered_names = [names_list[i] for i in order_indices] if order_indices else names_list
             
             fuel_needed = dist_km / fuel_ratio if fuel_ratio > 0 else 0
             fuel_cost_total = fuel_needed * fuel_price
@@ -125,7 +133,8 @@ with tab1:
             
             st.session_state.calculation_result = {
                 "coords": coords_list,
-                "names": names_list,
+                "ordered_names": ordered_names,
+                "order_indices": order_indices,
                 "dist_km": dist_km,
                 "dur_min": dur_min,
                 "geom": geom,
@@ -155,6 +164,9 @@ with tab1:
         if st.session_state.calculation_result is not None:
             curr = res["currency"]
             
+            # Tampilkan Urutan Rute Hasil Optimasi
+            st.success("✅ **Optimized Visiting Sequence:** " + " ➔ ".join(res["ordered_names"]))
+            
             col_res1, col_res2 = st.columns(2)
             with col_res1:
                 st.write(f"**Total Distance:** {res['dist_km']:.2f} km")
@@ -175,11 +187,11 @@ with tab1:
             m = folium.Map(location=[avg_lat, avg_lon], zoom_start=8)
             
             # Origin Marker
-            folium.Marker(res["coords"][0], popup=f"Origin: {res['names'][0]}", icon=folium.Icon(color="green")).add_to(m)
+            folium.Marker(res["coords"][0], popup=f"Origin: {res['ordered_names'][0]}", icon=folium.Icon(color="green")).add_to(m)
             
-            # Destination Markers
+            # Destination Markers dengan urutan optimasi
             for idx, coord in enumerate(res["coords"][1:], start=1):
-                folium.Marker(coord, popup=f"Drop {idx}: {res['names'][idx]}", icon=folium.Icon(color="red")).add_to(m)
+                folium.Marker(coord, popup=f"Stop {idx}: {res['ordered_names'][idx]}", icon=folium.Icon(color="red")).add_to(m)
                 
             if res["geom"]:
                 polyline_coords = [[pt[1], pt[0]] for pt in res["geom"]["coordinates"]]
