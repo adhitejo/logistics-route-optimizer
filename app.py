@@ -34,7 +34,6 @@ def get_optimized_trip(waypoints):
     Menghitung rute terbaik dan mengurutkan titik destinasi secara otomatis
     """
     coord_str = ";".join([f"{lon},{lat}" for lat, lon in waypoints])
-    # source=first memastikan titik Origin tidak berubah tempat
     url = f"http://router.project-osrm.org/trip/v1/driving/{coord_str}?source=first&overview=full&geometries=geojson"
     try:
         res = requests.get(url).json()
@@ -44,7 +43,7 @@ def get_optimized_trip(waypoints):
             duration_min = trip["duration"] / 60.0
             geometry = trip["geometry"]
             
-            # Urutan indeks titik yang sudah dioptimasi oleh algoritma OSRM
+            # Urutan indeks lokasi hasil optimasi
             waypoint_order = [wp["waypoint_index"] for wp in res["waypoints"]]
             return distance_km, duration_min, geometry, waypoint_order
     except Exception:
@@ -120,7 +119,8 @@ with tab1:
         if valid and len(coords_list) >= 2:
             dist_km, dur_min, geom, order_indices = get_optimized_trip(coords_list)
             
-            # Susun ulang urutan nama lokasi berdasarkan hasil optimasi algoritma
+            # Memetakan koordinat dan nama lokasi berdasarkan urutan nomor (1, 2, 3...)
+            ordered_coords = [coords_list[i] for i in order_indices] if order_indices else coords_list
             ordered_names = [names_list[i] for i in order_indices] if order_indices else names_list
             
             fuel_needed = dist_km / fuel_ratio if fuel_ratio > 0 else 0
@@ -132,9 +132,8 @@ with tab1:
             dt_arr = dt_dep + timedelta(minutes=dur_min)
             
             st.session_state.calculation_result = {
-                "coords": coords_list,
+                "ordered_coords": ordered_coords,
                 "ordered_names": ordered_names,
-                "order_indices": order_indices,
                 "dist_km": dist_km,
                 "dur_min": dur_min,
                 "geom": geom,
@@ -165,7 +164,7 @@ with tab1:
             curr = res["currency"]
             
             # Tampilkan Urutan Rute Hasil Optimasi
-            st.success("✅ **Optimized Visiting Sequence:** " + " ➔ ".join(res["ordered_names"]))
+            st.success("✅ **Optimized Visiting Sequence:** " + " ➔ ".join([f"{idx+1}. {name.split(',')[0]}" for idx, name in enumerate(res["ordered_names"])]))
             
             col_res1, col_res2 = st.columns(2)
             with col_res1:
@@ -181,23 +180,33 @@ with tab1:
                 st.markdown(f"### **Total Operational Cost: {curr} {res['total_cost']:,.2f}**")
             
             # Map Rendering
-            avg_lat = sum(p[0] for p in res["coords"]) / len(res["coords"])
-            avg_lon = sum(p[1] for p in res["coords"]) / len(res["coords"])
+            avg_lat = sum(p[0] for p in res["ordered_coords"]) / len(res["ordered_coords"])
+            avg_lon = sum(p[1] for p in res["ordered_coords"]) / len(res["ordered_coords"])
             
             m = folium.Map(location=[avg_lat, avg_lon], zoom_start=8)
             
-            # Origin Marker
-            folium.Marker(res["coords"][0], popup=f"Origin: {res['ordered_names'][0]}", icon=folium.Icon(color="green")).add_to(m)
-            
-            # Destination Markers dengan urutan optimasi
-            for idx, coord in enumerate(res["coords"][1:], start=1):
-                folium.Marker(coord, popup=f"Stop {idx}: {res['ordered_names'][idx]}", icon=folium.Icon(color="red")).add_to(m)
+            # Menampilkan Marker Berurut Nomor (1, 2, 3...)
+            for idx, (coord, name) in enumerate(zip(res["ordered_coords"], res["ordered_names"]), start=1):
+                color = "green" if idx == 1 else "red"
+                label_type = "Origin" if idx == 1 else f"Stop {idx-1}"
+                
+                folium.Marker(
+                    coord, 
+                    popup=f"<b>#{idx} {label_type}</b><br>{name}",
+                    tooltip=f"#{idx} - {label_type}",
+                    icon=folium.plugins.BeautifyIcon(
+                        number=idx,
+                        border_color=color,
+                        text_color=color,
+                        inner_icon_style="font-weight:bold;font-size:12px;"
+                    ) if hasattr(folium, 'plugins') and hasattr(folium.plugins, 'BeautifyIcon') else folium.Icon(color=color, icon=str(idx), prefix='fa')
+                ).add_to(m)
                 
             if res["geom"]:
                 polyline_coords = [[pt[1], pt[0]] for pt in res["geom"]["coordinates"]]
                 folium.PolyLine(polyline_coords, color="blue", weight=5, opacity=0.8).add_to(m)
                 
-            st_folium(m, width=700, height=400, key="multi_drop_map")
+            st_folium(m, width=700, height=400, key="numbered_multi_drop_map")
 
 with tab2:
     st.subheader("📦 Order Management System (OMS)")
@@ -206,3 +215,4 @@ with tab2:
 with tab3:
     st.subheader("🚛 Transport Management System (TMS)")
     st.info("Feature Coming Soon: Live fleet tracking, driver assignments, maintenance schedules, and POD management.")
+            
