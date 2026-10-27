@@ -45,7 +45,7 @@ def get_osrm_route(origin_coords, dest_coords):
         return distance_km, duration_min, geometry
     return 0, 0, None
 
-st.title("🚚 Route & Cost Optimizer Logistik")
+st.title("🚚 Route & Cost Optimizer Logistic")
 
 # Section 1: Input Rute & Armada
 col1, col2 = st.columns(2)
