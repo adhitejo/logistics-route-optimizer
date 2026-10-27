@@ -148,4 +148,49 @@ with tab1:
         with c_head:
             st.subheader("📊 Optimization & Cost Breakdown")
         with c_close:
-            if st.button("❌
+            if st.button("Close"):
+                st.session_state.calculation_result = None
+                st.rerun()
+
+        if st.session_state.calculation_result is not None:
+            curr = res["currency"]
+            
+            col_res1, col_res2 = st.columns(2)
+            with col_res1:
+                st.write(f"**Total Distance:** {res['dist_km']:.2f} km")
+                st.write(f"**Estimated Travel Time:** {int(res['dur_min'] // 60)} hrs {int(res['dur_min'] % 60)} mins")
+                st.write(f"**Estimated Arrival Time (ETA):** {res['eta']}")
+                st.write(f"**Vehicle Type:** {res['vehicle_type']}")
+                
+            with col_res2:
+                st.write(f"**Estimated Fuel Usage:** {res['fuel_needed']:.2f} Units ({curr} {res['fuel_cost_total']:,.2f})")
+                st.write(f"**Toll Fee:** {curr} {res['toll_cost']:,.2f}")
+                st.write(f"**Driver Allowance:** {curr} {res['driver_cost']:,.2f}")
+                st.markdown(f"### **Total Operational Cost: {curr} {res['total_cost']:,.2f}**")
+            
+            # Map Rendering
+            avg_lat = sum(p[0] for p in res["coords"]) / len(res["coords"])
+            avg_lon = sum(p[1] for p in res["coords"]) / len(res["coords"])
+            
+            m = folium.Map(location=[avg_lat, avg_lon], zoom_start=8)
+            
+            # Origin Marker
+            folium.Marker(res["coords"][0], popup=f"Origin: {res['names'][0]}", icon=folium.Icon(color="green")).add_to(m)
+            
+            # Destination Markers
+            for idx, coord in enumerate(res["coords"][1:], start=1):
+                folium.Marker(coord, popup=f"Drop {idx}: {res['names'][idx]}", icon=folium.Icon(color="red")).add_to(m)
+                
+            if res["geom"]:
+                polyline_coords = [[pt[1], pt[0]] for pt in res["geom"]["coordinates"]]
+                folium.PolyLine(polyline_coords, color="blue", weight=5, opacity=0.8).add_to(m)
+                
+            st_folium(m, width=700, height=400, key="multi_drop_map")
+
+with tab2:
+    st.subheader("📦 Order Management System (OMS)")
+    st.info("Feature Coming Soon: Manage incoming delivery orders, SKU tracking, and customer dispatch requests.")
+
+with tab3:
+    st.subheader("🚛 Transport Management System (TMS)")
+    st.info("Feature Coming Soon: Live fleet tracking, driver assignments, maintenance schedules, and POD management.")
