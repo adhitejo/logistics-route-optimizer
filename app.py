@@ -4,27 +4,22 @@ import folium
 from streamlit_folium import st_folium
 from datetime import datetime, timedelta
 
-# Data Rasio BBM (km/liter)
-RASIO_BBM = {
+# Config Halaman
+st.set_page_config(page_title="Logistic - Route & Cost Optimizer", layout="wide")
+
+# Master Data Indonesia
+RASIO_BBM_ID = {
     "Blindvan": 12.0, "Granmax Box": 11.0,
     "CDE": 7.5, "CDE L": 7.25, "CDE Pendingin": 6.5, "CDE L Pendingin": 6.25,
     "CDD": 7.0, "CDD L": 6.5, "CDD Pendingin": 6.0, "CDD L Pendingin": 5.5,
     "Fuso": 4.0, "Tronton Wingbox": 3.0
 }
 
-# Pemetaan Golongan Tol
-GOLONGAN_TOL = {
-    "Blindvan": "Golongan I", "Granmax Box": "Golongan I",
-    "CDE": "Golongan I", "CDE L": "Golongan I", "CDE Pendingin": "Golongan I", "CDE L Pendingin": "Golongan I",
-    "CDD": "Golongan II", "CDD L": "Golongan II", "CDD Pendingin": "Golongan II", "CDD L Pendingin": "Golongan II",
-    "Fuso": "Golongan III", "Tronton Wingbox": "Golongan III"
-}
-
-HARGA_SOLAR = 6800
+HARGA_SOLAR_IDR = 6800
 
 def get_coordinates(location_name):
     url = f"https://nominatim.openstreetmap.org/search?format=json&q={location_name}&limit=1"
-    headers = {"User-Agent": "LogisticsRouteApp/1.0"}
+    headers = {"User-Agent": "LogisticApp/1.0"}
     try:
         res = requests.get(url, headers=headers).json()
         if res:
@@ -33,10 +28,10 @@ def get_coordinates(location_name):
         pass
     return None, None, None
 
-def get_osrm_route(origin_coords, dest_coords):
-    lon1, lat1 = origin_coords[1], origin_coords[0]
-    lon2, lat2 = dest_coords[1], dest_coords[0]
-    url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
+def get_osrm_route(waypoints):
+    """Menghitung rute multi-drop OSRM"""
+    coord_str = ";".join([f"{lon},{lat}" for lat, lon in waypoints])
+    url = f"http://router.project-osrm.org/route/v1/driving/{coord_str}?overview=full&geometries=geojson"
     try:
         res = requests.get(url).json()
         if res.get("routes"):
@@ -49,84 +44,108 @@ def get_osrm_route(origin_coords, dest_coords):
         pass
     return 0, 0, None
 
-# Inisialisasi Session State agar hasil perhitungan tersimpan
-if "hasil_kalkulasi" not in st.session_state:
-    st.session_state.hasil_kalkulasi = None
+# Session state initialization
+if "calculation_result" not in st.session_state:
+    st.session_state.calculation_result = None
 
-st.title("🚚 Route & Cost Optimizer Logistik")
+st.title("🚛 Logistic")
 
-col1, col2 = st.columns(2)
-with col1:
-    origin_input = st.text_input("Lokasi Asal (Origin)", value="Surabaya")
-    dest_input = st.text_input("Lokasi Tujuan (Destination)", value="Malang")
-    armada = st.selectbox("Pilih Jenis Armada", list(RASIO_BBM.keys()))
+# Navigasi Tab Utama
+tab1, tab2, tab3 = st.tabs(["Route & Cost Optimizer", "Order Management System (OMS)", "Transport Management System (TMS)"])
 
-with col2:
-    biaya_supir = st.number_input("Biaya Supir per Hari (Rp)", value=200000, step=25000)
-    jam_berangkat = st.time_input("Waktu Keberangkatan", value=datetime.now().time())
-    biaya_tol = st.number_input(f"Estimasi Tarif Tol ({GOLONGAN_TOL[armada]}) (Rp)", value=50000)
-    pilih_tol = st.radio("Opsi Rute", ["Via Tol", "Non-Tol"])
-
-# Tombol untuk Proses Hitung
-if st.button("Hitung Rute & Biaya"):
-    lat1, lon1, name1 = get_coordinates(origin_input)
-    lat2, lon2, name2 = get_coordinates(dest_input)
+with tab1:
+    st.subheader("Route & Cost Optimization")
     
-    if lat1 and lat2:
-        dist_km, dur_min, geom = get_osrm_route((lat1, lon1), (lat2, lon2))
-        
-        rasio = RASIO_BBM[armada]
-        kebutuhan_bbm = dist_km / rasio
-        biaya_bbm = kebutuhan_bbm * HARGA_SOLAR
-        tol_final = biaya_tol if pilih_tol == "Via Tol" else 0
-        total_biaya = biaya_bbm + tol_final + biaya_supir
-        
-        now = datetime.now()
-        dt_berangkat = datetime.combine(now.date(), jam_berangkat)
-        dt_tiba = dt_berangkat + timedelta(minutes=dur_min)
-        
-        # Simpan seluruh data ke session state
-        st.session_state.hasil_kalkulasi = {
-            "lat1": lat1, "lon1": lon1, "name1": name1,
-            "lat2": lat2, "lon2": lon2, "name2": name2,
-            "dist_km": dist_km, "dur_min": dur_min, "geom": geom,
-            "armada": armada, "kebutuhan_bbm": kebutuhan_bbm,
-            "biaya_bbm": biaya_bbm, "total_biaya": total_biaya,
-            "eta": dt_tiba.strftime('%H:%M WIB')
-        }
-    else:
-        st.error("Lokasi tidak ditemukan. Coba masukkan nama kota/daerah yang lebih jelas.")
-
-# Tampilkan Hasil Perhitungan jika ada di session state
-if st.session_state.hasil_kalkulasi is not None:
-    data = st.session_state.hasil_kalkulasi
+    # Selection Region
+    region = st.radio("Operating Region", ["Indonesia", "Outside Indonesia"], horizontal=True)
+    currency = "IDR" if region == "Indonesia" else "USD"
     
-    st.markdown("---")
+    col1, col2 = st.columns(2)
     
-    # Header Hasil + Tombol Close
-    col_title, col_close = st.columns([4, 1])
-    with col_title:
-        st.subheader("📊 Hasil Optimasi Rute & Biaya")
-    with col_close:
-        if st.button("❌ Close"):
-            st.session_state.hasil_kalkulasi = None
-            st.rerun()
-
-    if st.session_state.hasil_kalkulasi is not None:
-        st.write(f"**Jarak Tempuh:** {data['dist_km']:.2f} km")
-        st.write(f"**Estimasi Waktu Tempuh:** {int(data['dur_min'] // 60)} Jam {int(data['dur_min'] % 60)} Menit")
-        st.write(f"**Estimasi Waktu Tiba (ETA):** {data['eta']}")
-        st.write(f"**Golongan Tol:** {GOLONGAN_TOL[data['armada']]}")
-        st.write(f"**Konsumsi BBM:** {data['kebutuhan_bbm']:.2f} Liter (Rp {data['biaya_bbm']:,.0f})")
-        st.write(f"**Total Biaya Operasional:** Rp {data['total_biaya']:,.0f}")
+    with col1:
+        st.markdown("### 📍 Location & Drops")
+        origin_input = st.text_input("Origin", value="Surabaya")
         
-        # Render Peta
-        m = folium.Map(location=[(data['lat1'] + data['lat2'])/2, (data['lon1'] + data['lon2'])/2], zoom_start=9)
-        folium.Marker([data['lat1'], data['lon1']], popup=f"Origin: {data['name1']}", icon=folium.Icon(color="green")).add_to(m)
-        folium.Marker([data['lat2'], data['lon2']], popup=f"Destination: {data['name2']}", icon=folium.Icon(color="red")).add_to(m)
+        num_dest = st.number_input("Number of Destination Points (Max 3 for Free Plan)", min_value=1, max_value=5, value=1)
         
-        if data['geom']:
-            coords = [[pt[1], pt[0]] for pt in data['geom']["coordinates"]]
-            folium.PolyLine(coords, color="blue", weight=5, opacity=0.8).add_to(m)
+        if num_dest > 3:
+            st.warning("⚠️ Free plan limits up to 3 destinations. Upgrade to Pro for unlimited multi-drop routing!")
+            num_dest = 3
             
-        st_folium(m, width=350, height=300, key="leaflet_map")
+        destinations = []
+        for i in range(int(num_dest)):
+            dest = st.text_input(f"Destination {i+1}", value="Malang" if i == 0 else f"Destination {i+1}")
+            destinations.append(dest)
+            
+    with col2:
+        st.markdown("### 🚚 Vehicle & Cost Configuration")
+        
+        if region == "Indonesia":
+            vehicle_type = st.selectbox("Vehicle Type", list(RASIO_BBM_ID.keys()))
+            fuel_ratio = RASIO_BBM_ID[vehicle_type]
+            fuel_price = HARGA_SOLAR_IDR
+            st.caption(f"Default Fuel Ratio: {fuel_ratio} km/L | Price: Rp {fuel_price}/L")
+        else:
+            vehicle_type = st.text_input("Custom Vehicle Type", value="Heavy Duty Truck")
+            fuel_price = st.number_input("Fuel Price (per Liter / Gallon)", value=3.50, step=0.1)
+            fuel_ratio = st.number_input("Fuel Efficiency Ratio (Distance per Unit Fuel)", value=6.0, step=0.5)
+            
+        driver_cost = st.number_input(f"Driver Daily Allowance ({currency})", value=200000 if region == "Indonesia" else 150, step=10)
+        departure_time = st.time_input("Departure Time", value=datetime.now().time())
+        toll_cost = st.number_input(f"Toll Fee Estimation ({currency})", value=50000 if region == "Indonesia" else 20, step=5)
+        
+        st.info("💡 **Pro Feature Preview:** Automatic Toll vs Non-Toll route segment breakdown is available in the Enterprise plan.")
+
+    if st.button("Calculate Route & Cost", type="primary"):
+        all_locations = [origin_input] + destinations
+        coords_list = []
+        names_list = []
+        valid = True
+        
+        for loc in all_locations:
+            lat, lon, name = get_coordinates(loc)
+            if lat and lon:
+                coords_list.append((lat, lon))
+                names_list.append(name)
+            else:
+                st.error(f"Could not locate address: '{loc}'. Please try a more specific address.")
+                valid = False
+                break
+                
+        if valid and len(coords_list) >= 2:
+            dist_km, dur_min, geom = get_osrm_route(coords_list)
+            
+            fuel_needed = dist_km / fuel_ratio if fuel_ratio > 0 else 0
+            fuel_cost_total = fuel_needed * fuel_price
+            total_cost = fuel_cost_total + toll_cost + driver_cost
+            
+            now = datetime.now()
+            dt_dep = datetime.combine(now.date(), departure_time)
+            dt_arr = dt_dep + timedelta(minutes=dur_min)
+            
+            st.session_state.calculation_result = {
+                "coords": coords_list,
+                "names": names_list,
+                "dist_km": dist_km,
+                "dur_min": dur_min,
+                "geom": geom,
+                "vehicle_type": vehicle_type,
+                "fuel_needed": fuel_needed,
+                "fuel_cost_total": fuel_cost_total,
+                "toll_cost": toll_cost,
+                "driver_cost": driver_cost,
+                "total_cost": total_cost,
+                "eta": dt_arr.strftime('%I:%M %p'),
+                "currency": currency
+            }
+
+    # Display Results
+    if st.session_state.calculation_result is not None:
+        res = st.session_state.calculation_result
+        st.markdown("---")
+        
+        c_head, c_close = st.columns([5, 1])
+        with c_head:
+            st.subheader("📊 Optimization & Cost Breakdown")
+        with c_close:
+            if st.button("❌
