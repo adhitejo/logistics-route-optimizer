@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import folium
+import math
 from streamlit_folium import st_folium
 from datetime import datetime, timedelta
 
@@ -28,27 +29,48 @@ def get_coordinates(location_name):
         pass
     return None, None, None
 
-def get_optimized_trip(waypoints):
-    """
-    Menggunakan OSRM Trip Service (TSP Algorithm)
-    Menghitung rute terbaik dan mengurutkan titik destinasi secara otomatis
-    """
-    coord_str = ";".join([f"{lon},{lat}" for lat, lon in waypoints])
-    url = f"http://router.project-osrm.org/trip/v1/driving/{coord_str}?source=first&overview=full&geometries=geojson"
+def haversine_distance(coord1, coord2):
+    """Menhitung jarak garis lurus (Haversine) antara dua koordinat lat/lon"""
+    R = 6371.0 # Radius bumi (km)
+    lat1, lon1 = math.radians(coord1[0]), math.radians(coord1[1])
+    lat2, lon2 = math.radians(coord2[0]), math.radians(coord2[1])
+    
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    
+    a = math.sin(dlat / 2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+def solve_nearest_neighbor(coords_list):
+    """Algoritma Nearest Neighbor untuk mengurutkan destinasi paling logis dari Origin"""
+    unvisited = list(range(1, len(coords_list)))
+    current_idx = 0
+    route_order = [0]
+    
+    while unvisited:
+        nearest_idx = min(unvisited, key=lambda i: haversine_distance(coords_list[current_idx], coords_list[i]))
+        route_order.append(nearest_idx)
+        unvisited.remove(nearest_idx)
+        current_idx = nearest_idx
+        
+    return route_order
+
+def get_osrm_sequential_route(ordered_coords):
+    """Menghitung rute sekuensial berdasarkan urutan teroptimasi"""
+    coord_str = ";".join([f"{lon},{lat}" for lat, lon in ordered_coords])
+    url = f"http://router.project-osrm.org/route/v1/driving/{coord_str}?overview=full&geometries=geojson"
     try:
         res = requests.get(url).json()
-        if res.get("code") == "Ok" and res.get("trips"):
-            trip = res["trips"][0]
-            distance_km = trip["distance"] / 1000.0
-            duration_min = trip["duration"] / 60.0
-            geometry = trip["geometry"]
-            
-            # Urutan indeks lokasi hasil optimasi
-            waypoint_order = [wp["waypoint_index"] for wp in res["waypoints"]]
-            return distance_km, duration_min, geometry, waypoint_order
+        if res.get("routes"):
+            route = res["routes"][0]
+            distance_km = route["distance"] / 1000.0
+            duration_min = route["duration"] / 60.0
+            geometry = route["geometry"]
+            return distance_km, duration_min, geometry
     except Exception:
         pass
-    return 0, 0, None, []
+    return 0, 0, None
 
 # Session state initialization
 if "calculation_result" not in st.session_state:
@@ -70,14 +92,14 @@ with tab1:
         st.markdown("### 📍 Location & Drops")
         origin_input = st.text_input("Origin (Start Point)", value="Surabaya")
         
-        num_dest = st.number_input("Number of Destination Points (Max 3 for Free Plan)", min_value=1, max_value=5, value=2)
+        num_dest = st.number_input("Number of Destination Points (Max 3 for Free Plan)", min_value=1, max_value=5, value=3)
         
         if num_dest > 3:
             st.warning("⚠️ Free plan limits up to 3 destinations. Upgrade to Pro for unlimited multi-drop routing!")
             num_dest = 3
             
         destinations = []
-        default_dests = ["Kediri", "Malang", "Blitar"]
+        default_dests = ["Karawang", "Bandung", "Sukabumi"]
         for i in range(int(num_dest)):
             default_val = default_dests[i] if i < len(default_dests) else f"Destination {i+1}"
             dest = st.text_input(f"Destination Point {i+1}", value=default_val)
@@ -98,7 +120,11 @@ with tab1:
             
         driver_cost = st.number_input(f"Driver Daily Allowance ({currency})", value=200000 if region == "Indonesia" else 150, step=10)
         departure_time = st.time_input("Departure Time", value=datetime.now().time())
-        toll_cost = st.number_input(f"Toll Fee Estimation ({currency})", value=50000 if region == "Indonesia" else 20, step=5)
+        
+        # Opsi Toll & Fee Input
+        route_option = st.radio("Route Option", ["Via Toll", "Non-Toll"], horizontal=True)
+        toll_cost_input = st.number_input(f"Toll Fee Estimation ({currency})", value=150000 if region == "Indonesia" else 20, step=5)
+        toll_cost = toll_cost_input if route_option == "Via Toll" else 0
 
     if st.button("Calculate & Optimize Route", type="primary"):
         all_locations = [origin_input] + destinations
@@ -117,11 +143,14 @@ with tab1:
                 break
                 
         if valid and len(coords_list) >= 2:
-            dist_km, dur_min, geom, order_indices = get_optimized_trip(coords_list)
+            # Hitung urutan terdekat yang efisien
+            order_indices = solve_nearest_neighbor(coords_list)
             
-            # Memetakan koordinat dan nama lokasi berdasarkan urutan nomor (1, 2, 3...)
-            ordered_coords = [coords_list[i] for i in order_indices] if order_indices else coords_list
-            ordered_names = [names_list[i] for i in order_indices] if order_indices else names_list
+            ordered_coords = [coords_list[i] for i in order_indices]
+            ordered_names = [names_list[i] for i in order_indices]
+            
+            # Hitung jarak rute berurutan
+            dist_km, dur_min, geom = get_osrm_sequential_route(ordered_coords)
             
             fuel_needed = dist_km / fuel_ratio if fuel_ratio > 0 else 0
             fuel_cost_total = fuel_needed * fuel_price
@@ -140,6 +169,7 @@ with tab1:
                 "vehicle_type": vehicle_type,
                 "fuel_needed": fuel_needed,
                 "fuel_cost_total": fuel_cost_total,
+                "route_option": route_option,
                 "toll_cost": toll_cost,
                 "driver_cost": driver_cost,
                 "total_cost": total_cost,
@@ -172,10 +202,11 @@ with tab1:
                 st.write(f"**Estimated Travel Time:** {int(res['dur_min'] // 60)} hrs {int(res['dur_min'] % 60)} mins")
                 st.write(f"**Estimated Arrival Time (ETA):** {res['eta']}")
                 st.write(f"**Vehicle Type:** {res['vehicle_type']}")
+                st.write(f"**Selected Route:** {res['route_option']}")
                 
             with col_res2:
                 st.write(f"**Estimated Fuel Usage:** {res['fuel_needed']:.2f} Units ({curr} {res['fuel_cost_total']:,.2f})")
-                st.write(f"**Toll Fee:** {curr} {res['toll_cost']:,.2f}")
+                st.write(f"**Toll Fee ({res['route_option']}):** {curr} {res['toll_cost']:,.2f}")
                 st.write(f"**Driver Allowance:** {curr} {res['driver_cost']:,.2f}")
                 st.markdown(f"### **Total Operational Cost: {curr} {res['total_cost']:,.2f}**")
             
@@ -183,7 +214,7 @@ with tab1:
             avg_lat = sum(p[0] for p in res["ordered_coords"]) / len(res["ordered_coords"])
             avg_lon = sum(p[1] for p in res["ordered_coords"]) / len(res["ordered_coords"])
             
-            m = folium.Map(location=[avg_lat, avg_lon], zoom_start=8)
+            m = folium.Map(location=[avg_lat, avg_lon], zoom_start=7)
             
             # Menampilkan Marker Berurut Nomor (1, 2, 3...)
             for idx, (coord, name) in enumerate(zip(res["ordered_coords"], res["ordered_names"]), start=1):
@@ -194,12 +225,7 @@ with tab1:
                     coord, 
                     popup=f"<b>#{idx} {label_type}</b><br>{name}",
                     tooltip=f"#{idx} - {label_type}",
-                    icon=folium.plugins.BeautifyIcon(
-                        number=idx,
-                        border_color=color,
-                        text_color=color,
-                        inner_icon_style="font-weight:bold;font-size:12px;"
-                    ) if hasattr(folium, 'plugins') and hasattr(folium.plugins, 'BeautifyIcon') else folium.Icon(color=color, icon=str(idx), prefix='fa')
+                    icon=folium.Icon(color=color, icon="info-sign")
                 ).add_to(m)
                 
             if res["geom"]:
@@ -215,4 +241,4 @@ with tab2:
 with tab3:
     st.subheader("🚛 Transport Management System (TMS)")
     st.info("Feature Coming Soon: Live fleet tracking, driver assignments, maintenance schedules, and POD management.")
-            
+    
