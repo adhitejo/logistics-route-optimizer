@@ -2,3 +2,5 @@ streamlit
 requests
 folium
 streamlit-folium
+pandas
+st-gsheets-connection
