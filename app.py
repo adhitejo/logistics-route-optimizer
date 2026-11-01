@@ -12,10 +12,9 @@ from streamlit_gsheets import GSheetsConnection
 # ------------------------------------------
 st.set_page_config(page_title="Logistic Enterprise System", layout="wide")
 
-# Connect to Google Sheets
+# Connect to Google Sheets (Read Mode)
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Helper function to safely read Google Sheets
 def load_data(sheet_url):
     try:
         return conn.read(spreadsheet=sheet_url, ttl=0)
@@ -28,11 +27,16 @@ URL_DRIVERS = "https://docs.google.com/spreadsheets/d/1aD4TnY5FBZ5zJ3GmZ7QMw8vGC
 URL_ORDERS = "https://docs.google.com/spreadsheets/d/18vRdScdK_b5TEfSBxgyDu0LlwsKZN22GG5af8QMhB_M/edit"
 URL_SETTLEMENTS = "https://docs.google.com/spreadsheets/d/1aWtn2ehrQ99eKqeHof2tVQkxAPj00JuSqUZRTaoBFac/edit"
 
-# Load Initial Dataframe
+# Load Master Data
 df_vehicles = load_data(URL_VEHICLES)
 df_drivers = load_data(URL_DRIVERS)
-df_orders = load_data(URL_ORDERS)
-df_settlements = load_data(URL_SETTLEMENTS)
+
+# Initialize Session State for Orders & Settlements to avoid Write-Permission Errors
+if "session_orders" not in st.session_state:
+    st.session_state.session_orders = load_data(URL_ORDERS)
+
+if "session_settlements" not in st.session_state:
+    st.session_state.session_settlements = load_data(URL_SETTLEMENTS)
 
 # Master Fuel Ratio & Pricing
 RASIO_BBM_ID = {
@@ -43,7 +47,7 @@ RASIO_BBM_ID = {
 }
 HARGA_SOLAR_IDR = 6800
 
-# Helper Functions (Geocoding & Route Engine)
+# Helper Functions
 def get_coordinates(location_name):
     url = f"https://nominatim.openstreetmap.org/search?format=json&q={location_name}&limit=1"
     headers = {"User-Agent": "LogisticApp/1.0"}
@@ -215,9 +219,8 @@ with tab1:
                 "Status": "DRAFT",
                 "Created_At": datetime.now().strftime('%Y-%m-%d %H:%M')
             }])
-            updated_orders = pd.concat([df_orders, new_order], ignore_index=True)
-            conn.update(spreadsheet=URL_ORDERS, data=updated_orders)
-            st.success("Route saved to Google Sheets OMS! Go to 'Order Management System' tab.")
+            st.session_state.session_orders = pd.concat([st.session_state.session_orders, new_order], ignore_index=True)
+            st.success("Route saved to OMS Draft! Go to 'Order Management System' tab.")
 
 # ------------------------------------------
 # TAB 2: ORDER MANAGEMENT SYSTEM (OMS)
@@ -227,12 +230,13 @@ with tab2:
     st.write("Manage orders & dispatch assignments to drivers")
     
     st.markdown("### 📋 Active Orders Database")
-    st.dataframe(df_orders, use_container_width=True)
+    st.dataframe(st.session_state.session_orders, use_container_width=True)
     
     st.markdown("---")
     st.markdown("### 🚀 Dispatch Assignment")
     
-    draft_orders = df_orders[df_orders["Status"] == "DRAFT"] if not df_orders.empty else pd.DataFrame()
+    df_ord = st.session_state.session_orders
+    draft_orders = df_ord[df_ord["Status"] == "DRAFT"] if not df_ord.empty and "Status" in df_ord.columns else pd.DataFrame()
     
     if draft_orders.empty:
         st.info("No DRAFT orders available. Create a route in Tab 1 first.")
@@ -255,10 +259,10 @@ with tab2:
 
         if st.button("🚀 Dispatch Order & Notify Driver", type="primary"):
             if nopol_select != "No Vehicle Available" and drv_select != "No Driver Available":
-                df_orders.loc[df_orders["Order_ID"] == selected_ord_id, ["Customer_Name", "Cargo_Weight_Kg", "Assigned_Driver", "Assigned_Nopol", "Cash_Advance", "Status"]] = [
-                    cust_input, cargo_input, drv_select, nopol_select, cash_adv_input, "DISPATCHED"
-                ]
-                conn.update(spreadsheet=URL_ORDERS, data=df_orders)
+                st.session_state.session_orders.loc[
+                    st.session_state.session_orders["Order_ID"] == selected_ord_id, 
+                    ["Customer_Name", "Cargo_Weight_Kg", "Assigned_Driver", "Assigned_Nopol", "Cash_Advance", "Status"]
+                ] = [cust_input, cargo_input, drv_select, nopol_select, cash_adv_input, "DISPATCHED"]
                 
                 drv_phone = df_drivers[df_drivers["Name"] == drv_select]["Phone"].iloc[0] if not df_drivers.empty else ""
                 wa_msg = f"Halo {drv_select}, tugas pengiriman baru {selected_ord_id} untuk {cust_input}.\nUnit: {nopol_select}\nRute: {selected_row['Route_Name']}\nUang Jalan: Rp {cash_adv_input:,.0f}"
@@ -266,6 +270,7 @@ with tab2:
                 
                 st.success(f"Order {selected_ord_id} Dispatched!")
                 st.markdown(f"📱 **[Click Here to Send WhatsApp Task to Driver]({wa_link})**")
+                st.rerun()
             else:
                 st.error("Select valid Driver and Vehicle before dispatching!")
 
@@ -291,7 +296,8 @@ with tab3:
     st.markdown("---")
     st.markdown("### 🛣️ Trip Settlement & POD Return")
     
-    dispatched_orders = df_orders[df_orders["Status"] == "DISPATCHED"] if not df_orders.empty else pd.DataFrame()
+    df_ord_tms = st.session_state.session_orders
+    dispatched_orders = df_ord_tms[df_ord_tms["Status"] == "DISPATCHED"] if not df_ord_tms.empty and "Status" in df_ord_tms.columns else pd.DataFrame()
     
     if dispatched_orders.empty:
         st.info("No active trips in transit.")
@@ -324,19 +330,16 @@ with tab3:
                         "POD_Status": pod_status,
                         "Settled_At": datetime.now().strftime('%Y-%m-%d %H:%M')
                     }])
-                    updated_settlements = pd.concat([df_settlements, new_settle], ignore_index=True)
-                    conn.update(spreadsheet=URL_SETTLEMENTS, data=updated_settlements)
-                    
-                    df_orders.loc[df_orders["Order_ID"] == row['Order_ID'], "Status"] = "COMPLETED"
-                    conn.update(spreadsheet=URL_ORDERS, data=df_orders)
+                    st.session_state.session_settlements = pd.concat([st.session_state.session_settlements, new_settle], ignore_index=True)
+                    st.session_state.session_orders.loc[st.session_state.session_orders["Order_ID"] == row['Order_ID'], "Status"] = "COMPLETED"
                     
                     st.success(f"Trip {row['Order_ID']} Settled and Saved!")
                     st.rerun()
 
-    if not df_settlements.empty:
+    if not st.session_state.session_settlements.empty:
         st.markdown("---")
         st.markdown("### 📑 Settled Trip History")
-        st.dataframe(df_settlements, use_container_width=True)
+        st.dataframe(st.session_state.session_settlements, use_container_width=True)
 
 # ------------------------------------------
 # TAB 4: MASTER DATA MANAGEMENT
@@ -346,7 +349,7 @@ with tab4:
     m_tab1, m_tab2 = st.tabs(["Master Vehicles", "Master Drivers"])
     
     with m_tab1:
-        st.markdown("### 🚚 Master Vehicles List")
+        st.markdown("### 🚚 Master Vehicles List (Surabaya L Plate)")
         st.dataframe(df_vehicles, use_container_width=True)
         
     with m_tab2:
