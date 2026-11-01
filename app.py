@@ -43,6 +43,4 @@ RASIO_BBM_ID = {
 }
 HARGA_SOLAR_IDR = 6800
 
-# Helper Functions (Geocoding & Route Engine)
-def get_coordinates(location_name):
-    url = f"
+# Helper Functions (Ge
