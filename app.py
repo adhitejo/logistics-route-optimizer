@@ -1,4 +1,14 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
+
+# Inisialisasi Koneksi Google Sheets
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+# Membaca data dari Google Sheets
+df_vehicles = conn.read(spreadsheet="https://docs.google.com/spreadsheets/d/12DUIfV9cD-qh507CdWQAlN62wnF5jVvn5eD5-9kJcek/edit")
+df_drivers = conn.read(spreadsheet="https://docs.google.com/spreadsheets/d/1aD4TnY5FBZ5zJ3GmZ7QMw8vGCkc3GNyeeNKXNobkr48/edit")
+
+import streamlit as st
 import requests
 import folium
 import math
