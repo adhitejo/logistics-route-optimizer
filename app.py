@@ -57,6 +57,7 @@ ROLES = {
     "admin": ["Dashboard", "Maintenance per Asset", "Ready & Pairing", "Work Order Baru", "Update Work Order", "Status Harian", "Kelola Asset", "Kelola Driver", "Master Pairing"],
 }
 
+APP_VERSION = "2026-11-11 b (master pairing + per asset)"
 WIB = timezone(timedelta(hours=7))
 
 
@@ -1160,6 +1161,7 @@ PAGES = {
 def main():
     role = login()
     st.sidebar.title("🚛 Asset & Maintenance")
+    st.sidebar.caption(f"Versi {APP_VERSION}")
     page = st.sidebar.radio("Menu", ROLES[role])
     if st.sidebar.button("Refresh data"):
         st.cache_data.clear()
